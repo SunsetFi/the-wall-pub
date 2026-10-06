@@ -1,0 +1,21 @@
+pub mod player_defs;
+pub mod populance_defs;
+mod structure_collection;
+mod structure_def;
+mod structure_ent;
+mod structure_integrity;
+mod structure_kind;
+mod structure_slot;
+mod structure_state;
+mod structure_think;
+mod structure_type;
+
+pub use structure_collection::StructureCollection;
+pub use structure_def::StructureDef;
+pub use structure_ent::StructureEnt;
+pub use structure_integrity::Integrity;
+pub use structure_kind::StructureKind;
+pub use structure_slot::StructureSlot;
+pub use structure_state::StructureState;
+pub use structure_think::StructureThink;
+pub use structure_type::StructureType;
