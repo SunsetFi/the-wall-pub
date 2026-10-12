@@ -4,19 +4,19 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::structure_entity::{StructureDef, StructureType, player_defs, populance_defs};
 
-#[wasm_bindgen]
-#[derive(Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive, Sequence, Debug)]
-#[repr(u8)]
-pub enum StructureKind {
-  // Player
-  Artery,
-  BuildingPart,
-  Infrastructure,
-  MicroFactory,
-  Wall,
-  // Populance
-  Field,
-}
+// #[wasm_bindgen]
+// #[derive(Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive, Sequence, Debug)]
+// #[repr(u8)]
+// pub enum StructureKind {
+//   // Player
+//   Artery,
+//   BuildingPart,
+//   Infrastructure,
+//   MicroFactory,
+//   Wall,
+//   // Populance
+//   Field,
+// }
 
 impl StructureKind {
   pub const COUNT: usize = cardinality::<StructureKind>();

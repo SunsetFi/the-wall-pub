@@ -7,20 +7,28 @@ pub struct CoordinateOffset {
 }
 
 impl CoordinateOffset {
-  pub fn new(dx: i32, dy: i32) -> Self {
+  pub const fn new(dx: i32, dy: i32) -> Self {
     Self { dx, dy }
   }
 
-  pub fn distance(&self) -> u32 {
-    ((self.dx * self.dx + self.dy * self.dy) as f64).sqrt() as u32
+  pub fn distance(self) -> u32 {
+    let distance_squared: f64 = (self.dx * self.dx + self.dy * self.dy).into();
+    distance_squared.sqrt() as u32
   }
 
-  pub fn normalize(&self) -> Vector {
+  pub fn normalize(self) -> Vector {
     self.as_vector().normalize()
   }
 
-  pub fn as_vector(&self) -> Vector {
-    Vector::new(self.dx as f64, self.dy as f64)
+  pub fn as_vector(self) -> Vector {
+    Vector::new(self.dx.into(), self.dy.into())
+  }
+
+  pub fn as_coordinate(self) -> Option<Coordinate> {
+    if self.dx < 0 || self.dy < 0 {
+      return None;
+    }
+    Some(Coordinate::new(self.dx as u32, self.dy as u32))
   }
 }
 
@@ -57,6 +65,6 @@ impl From<Coordinate> for CoordinateOffset {
 
 impl From<CoordinateOffset> for Vector {
   fn from(offset: CoordinateOffset) -> Self {
-    Vector::new(offset.dx as f64, offset.dy as f64)
+    Vector::new(offset.dx.into(), offset.dy.into())
   }
 }

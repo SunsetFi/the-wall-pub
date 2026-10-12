@@ -1,6 +1,9 @@
-use crate::structure_entity::{
-  Integrity, StructureDef, StructureKind, StructureState, StructureThink,
-  structure_think::StructureThinkArgs,
+use crate::{
+  entity::Entity,
+  structure_entity::{
+    Integrity, StructureDef, StructureKind, StructureState, StructureThink,
+    structure_think::StructureThinkArgs,
+  },
 };
 
 pub struct StructureEnt {
@@ -8,32 +11,42 @@ pub struct StructureEnt {
   state: StructureState,
 }
 
-impl StructureEnt {
-  pub fn new(state: StructureState, integrity: Integrity) -> Self {
-    Self { integrity, state }
-  }
+impl Entity for StructureEnt {
+  type Kind = StructureKind;
+  type Def = StructureDef;
+  type Quantity = Integrity;
 
-  pub const fn kind(&self) -> StructureKind {
+  fn kind(&self) -> StructureKind {
     self.state.kind()
   }
 
-  pub const fn def(&self) -> &'static StructureDef {
+  fn def(&self) -> &'static StructureDef {
     self.kind().def()
   }
 
-  pub const fn integrity(&self) -> Integrity {
+  fn quantity(&self) -> Integrity {
     self.integrity
   }
 
-  pub fn set_integrity(&mut self, integrity: Integrity) {
-    self.integrity = integrity;
+  fn set_quantity(&mut self, quantity: Integrity) {
+    self.integrity = quantity;
+  }
+}
+
+impl StructureEnt {
+  pub fn new(state: StructureState, integrity: Integrity) -> Self {
+    Self { integrity, state }
   }
 
   pub const fn state(&self) -> &StructureState {
     &self.state
   }
 
+  pub fn state_mut(&mut self) -> &mut StructureState {
+    &mut self.state
+  }
+
   pub fn think(&self, args: StructureThinkArgs) {
-    self.state.think(args)
+    self.state.think(args);
   }
 }

@@ -2,16 +2,19 @@ use num_enum::TryFromPrimitive;
 
 use crate::blob_field::BlobField;
 use crate::commander_entity::CommanderCollection;
+use crate::direction::Direction;
+use crate::entity::Entity;
 use crate::fluid::Pressurized;
-use crate::fluid::fluid_transfer::FluidTransfer;
-use crate::fluid::fluid_transfer_to::FluidTransferTo;
-use crate::fluid::pressure_field::PressureField;
-use crate::geometry::grid::{CellIdx, Grid};
-use crate::micro_entity::{Density, MicroDef, MicroKind};
-use crate::world::{World, WorldMut};
+use crate::fluid::fluid_transfer::{
+  FluidLocation, FluidTransfer, FluidTransferNode, FluidTransferTo,
+};
+use crate::geometry::grid::Grid;
+use crate::micro_entity::{Density, MicroDef, MicroEnt, MicroKind};
+use crate::structure_entity::StructureState;
+use crate::world::WorldMut;
 
 struct CellClaim {
-  idx: CellIdx,
+  to: FluidTransferNode,
   kind: MicroKind,
   density: Density,
 }
@@ -20,41 +23,39 @@ pub struct FlowProcessor {
   /// The world grid
   grid: Grid,
 
-  /// Pressure field for world map cells
-  field: PressureField,
-
   // Cached and reused arrays for processing flow.
   // Only valid during the tick process
+  /// Pressure field for world map cells
+  pressures: Vec<f64>,
   /// All the transfers for this tick
   transfers: Vec<FluidTransfer>,
-  /// The number of incoming transfers for each cell by MicroIdx
+  /// The number of incoming transfers for each cell by `MicroIdx`.
   degree_in: Vec<u32>,
-  /// The number of outgoing transfers for each cell by MicroIdx
+  /// The number of outgoing transfers for each cell by `MicroIdx`.
   degree_out: Vec<u32>,
-  /// The scale of inflow for each cell by MicroIdx.
+  /// The scale of inflow for each cell by `MicroIdx`.
   /// Starts out as a sum, before scale_transfers scales it.
   desired_inflow: Vec<f64>,
-  /// The scale of outflow for each cell by MicroIdx.
-  /// Starts out as a sum, before scale_transfers scales it.
+  /// The scale of outflow for each cell by `MicroIdx`.
+  /// Starts out as a sum, before `scale_transfers` scales it.
   desired_outflow: Vec<f64>,
-  /// The net change desired for each cell by MicroIdx.
+  /// The net change desired for each cell by `MicroIdx`.
   delta: Vec<f64>,
   /// Claims for empty cells.
   empty_claims: Vec<CellClaim>,
-  /// Total sum of each micro kind trying to claim each cell, by MicroIdx.
+  /// Total sum of each micro kind trying to claim each cell, by `MicroIdx`.
   empty_claim_sums: Vec<[f64; MicroKind::COUNT]>,
 }
 
 impl FlowProcessor {
-  pub fn new(grid: Grid, world: &World) -> FlowProcessor {
-    let size = world.grid().size();
+  pub fn new(grid: Grid) -> FlowProcessor {
+    let size = FluidTransferNode::size(grid);
     FlowProcessor {
       grid,
-      field: PressureField::new(size),
+      pressures: vec![0.0; size],
       // Each cell can flow 4 ways, but not every cell will be occupied.
       // Guessing at a sane size
       transfers: Vec::with_capacity(size * 2),
-      // TODO: Do we want these always allocated, or is it okay to memory manage these?
       degree_in: vec![0; size],
       degree_out: vec![0; size],
       desired_inflow: vec![0.0; size],
@@ -66,10 +67,11 @@ impl FlowProcessor {
     }
   }
 
-  pub fn tick(&mut self, world: &mut WorldMut, blobs: &BlobField) {
+  pub fn tick(&mut self, world: &mut WorldMut, blobs: &BlobField, current_tick: u64) {
     self.reset();
-    self.collect_cell_pressures(world);
+    self.collect_cell_pressures(world, current_tick);
     self.process_world(world, blobs);
+    self.process_arteries(world);
     self.scale_transfers(world);
     self.compute_delta(world);
     self.apply(world);
@@ -86,9 +88,20 @@ impl FlowProcessor {
     self.empty_claim_sums.fill([0.0_f64; MicroKind::COUNT]);
   }
 
-  fn collect_cell_pressures(&mut self, world: &WorldMut) {
-    for (idx, micro) in world.micros.iter_enumerate() {
-      self.field.set(idx, micro.pressure());
+  fn collect_cell_pressures(&mut self, world: &WorldMut, current_tick: u64) {
+    for idx in FluidTransferNode::iter(world.grid) {
+      // Pressurized trait being useless because we need it for arteries not micros
+      let mut pressure = idx
+        .slot(world)
+        .map_or(0.0, |s| s.ent().map_or(0.0, |f| f.pressure()));
+
+      if let FluidLocation::Artery(idx) = idx.location() {
+        if let Some(StructureState::Artery(artery)) = world.structures.get(idx).state() {
+          pressure += artery.pulse_pressure(current_tick)
+        }
+      }
+
+      self.pressures[idx.index()] = pressure;
     }
   }
 
@@ -96,15 +109,65 @@ impl FlowProcessor {
     let grid = world.grid;
 
     // Process grid units
-    grid.for_each_adjacent_pairs(|a, b| {
-      let flow = self.compute_flow(world, blobs, a, b);
+    grid.for_each_adjacent_pair(|a, b| {
+      let a = FluidTransferNode::cell(a);
+      let b = FluidTransferNode::cell(b);
+      let flow = self.compute_flow(world, Some(blobs), a, b);
       if let Some(transfer) = flow {
         self.push_transfer(transfer);
       }
     });
+  }
 
-    // TODO: Process arteries
-    // TODO: Process artery outlets
+  fn process_arteries(&mut self, world: &WorldMut) {
+    for (idx, structure) in world.structures.iter_enumerate() {
+      let Some(structure) = structure.ent() else {
+        continue;
+      };
+
+      let StructureState::Artery(artery) = structure.state() else {
+        continue;
+      };
+
+      let from = FluidTransferNode::artery(world.grid, idx);
+      let from_coords = world.grid.coordinate(idx).unwrap();
+
+      for (dir, offset) in artery.direction().iter_direction_offset_pairs() {
+        let Some(to_idx) = world
+          .grid
+          .neighbor(from_coords.x, from_coords.y, offset.dx, offset.dy)
+        else {
+          continue;
+        };
+
+        if let Some(StructureState::Artery(other_artery)) = world.structures.get(to_idx).state() {
+          if dir != Direction::Left && dir != Direction::Down {
+            // Arteries shouldn't be checked twice, so limit us to a pair walk only.
+            continue;
+          }
+
+          if !artery.is_connected_to(dir, other_artery) {
+            continue;
+          }
+
+          // Artery connected to artery
+
+          let to = FluidTransferNode::artery(world.grid, to_idx);
+          let flow = self.compute_flow(world, None, from, to);
+
+          if let Some(transfer) = flow {
+            self.push_transfer(transfer);
+          }
+        } else {
+          // Artery open to the world
+          let to = FluidTransferNode::cell(to_idx);
+          let flow = self.compute_flow(world, None, from, to);
+          if let Some(transfer) = flow {
+            self.push_transfer(transfer);
+          }
+        }
+      }
+    }
   }
 
   fn push_transfer(&mut self, transfer: FluidTransfer) {
@@ -118,7 +181,7 @@ impl FlowProcessor {
   }
 
   fn scale_transfers(&mut self, world: &WorldMut) {
-    for transfer in self.transfers.iter_mut() {
+    for transfer in &mut self.transfers {
       if transfer.amount <= 0.0 {
         continue;
       }
@@ -132,24 +195,22 @@ impl FlowProcessor {
 
       let scale = 1.0 / restrict_count as f64;
 
-      // Scale the amount by outflow, so we don't break equilibrium
+      // Scale the amount by the cells acting on us, so we don't break equilibrium
       transfer.amount *= scale;
 
       self.desired_inflow[to] += transfer.amount;
       self.desired_outflow[from] += transfer.amount;
     }
 
-    for (idx, micro) in world.micros.iter_enumerate() {
+    for idx in FluidTransferNode::iter(world.grid) {
       let index = idx.index();
-
-      let density = micro.density().map(|f| f.value()).unwrap_or(0.0);
-      if density == 0.0 {
-        continue;
-      }
 
       let outflow = self.desired_outflow[index];
       let inflow = self.desired_inflow[index];
 
+      let density = idx
+        .slot(world)
+        .map_or(0.0, |s| s.ent().map_or(0.0, |e| e.quantity().value()));
       let egress = outflow.min(density);
       let room = Density::MAX.value() - (density - egress);
 
@@ -165,12 +226,10 @@ impl FlowProcessor {
         };
       }
     }
-
-    // TODO: We need to scale on other slots.  Arteries, artery outlets.
   }
 
   fn compute_delta(&mut self, world: &WorldMut) {
-    for transfer in self.transfers.iter() {
+    for transfer in &self.transfers {
       let from = transfer.from.index();
       let to = transfer.to.index();
       let amount = transfer.amount;
@@ -184,120 +243,108 @@ impl FlowProcessor {
 
       self.delta[from] -= amount;
 
+      // TODO: Pick based on combat power.  This lets non-combat micros win against combat ones
+      // on inflow alone.
       if let FluidTransferTo::Empty(_) = transfer.to {
-        let from_kind = world.micros.get(transfer.from).kind().unwrap();
+        let from_kind = transfer.from.micro(world).unwrap().kind();
         self.empty_claim_sums[to][from_kind as usize] += amount;
       } else {
         self.delta[to] += amount;
       }
     }
 
-    for idx in world.micros.iter_idx() {
-      let index = idx.index();
-      let mut max_kind: MicroKind = MicroKind::try_from_primitive(0).unwrap();
-      let mut max_amount = 0.0;
-      for (kind_idx, &amount) in self.empty_claim_sums[index].iter().enumerate() {
-        if amount > max_amount {
-          max_amount = amount;
-          max_kind = MicroKind::try_from_primitive(kind_idx as u8).unwrap();
+    for to in FluidTransferNode::iter(world.grid) {
+      let mut max_kind: Option<MicroKind> = None;
+      let mut max_density = 0.0;
+      for (kind_idx, &amount) in self.empty_claim_sums[to.index()].iter().enumerate() {
+        if amount > max_density {
+          max_density = amount;
+          max_kind = Some(MicroKind::try_from_primitive(kind_idx as u8).unwrap());
         }
       }
 
-      if let Some(max_amount) = Density::new(max_amount) {
-        self.empty_claims.push(CellClaim {
-          idx,
-          kind: max_kind,
-          density: max_amount,
-        });
+      if let Some(density) = Density::new(max_density)
+        && let Some(kind) = max_kind
+      {
+        self.empty_claims.push(CellClaim { to, kind, density });
       }
     }
   }
 
   fn apply(&self, world: &mut WorldMut) {
-    let micros = &mut world.micros;
-
-    for (idx, micro) in micros.iter_enumerate_mut() {
-      let index = idx.index();
-
-      let delta = self.delta[index];
+    for to in FluidTransferNode::iter(world.grid) {
+      let delta = self.delta[to.index()];
       if delta == 0.0 {
         continue;
       }
 
-      micro.offset_density(delta);
+      to.slot_mut(world).unwrap().offset_quantity(delta);
     }
 
-    for claim in self.empty_claims.iter() {
-      micros.get_mut(claim.idx).set(claim.kind, claim.density);
+    for claim in &self.empty_claims {
+      let to = claim.to;
+      to.slot_mut(world)
+        .unwrap()
+        .set_ent(MicroEnt::new(claim.kind, claim.density));
     }
   }
 
   fn compute_flow(
     &self,
     world: &WorldMut,
-    blobs: &BlobField,
-    a: CellIdx,
-    b: CellIdx,
+    blobs: Option<&BlobField>,
+    a: FluidTransferNode,
+    b: FluidTransferNode,
   ) -> Option<FluidTransfer> {
-    // TODO: Commander pressure
-    // TODO: Is precomputing these even buying us anything?  Its saving us a powf call
-    let difference = self.field.get(a) - self.field.get(b)
-      + self.compute_commander_flow(blobs, world.commanders, a, b);
+    let difference = self.pressures[a.index()] - self.pressures[b.index()]
+      + blobs.map_or(0.0, |blobs| {
+        self.compute_commander_flow(blobs, world.commanders, a, b)
+      });
 
     if difference == 0.0 {
       return None;
     }
 
     if difference < 0.0 {
-      return self.compute_flow_from(world, b, a, -difference);
+      return Self::compute_flow_from(world, b, a, -difference);
     }
 
-    self.compute_flow_from(world, a, b, difference)
+    Self::compute_flow_from(world, a, b, difference)
   }
 
   fn compute_commander_flow(
     &self,
     blobs: &BlobField,
     commanders: &CommanderCollection,
-    from: CellIdx,
-    to: CellIdx,
+    from: FluidTransferNode,
+    to: FluidTransferNode,
   ) -> f64 {
-    let label_from_opt = blobs.label_at_ordinal(from.index());
-    let label_to_opt = blobs.label_at_ordinal(to.index());
+    let label_from = blobs.label_at_ordinal(from.idx().index());
+    let label_to = blobs.label_at_ordinal(to.idx().index());
 
-    if label_from_opt.is_none() && label_to_opt.is_none() {
+    let Some(label) = label_from.or(label_to) else {
       return 0.0;
-    }
+    };
+
+    let from_c = self.grid.coordinate(from.idx()).unwrap();
+    let to_c = self.grid.coordinate(to.idx()).unwrap();
 
     let mut total: f64 = 0.0;
-
-    let from_c = self.grid.coordinate(from).unwrap();
-    let to_c = self.grid.coordinate(to).unwrap();
-
-    if let Some(label_from) = label_from_opt {
-      for commander in commanders.commanders_in(label_from) {
-        total += commander.pressure_at(from_c) - commander.pressure_at(to_c);
-      }
-    } else if let Some(label_to) = label_to_opt {
-      for commander in commanders.commanders_in(label_to) {
-        total += commander.pressure_at(from_c) - commander.pressure_at(to_c);
-      }
-    };
+    for commander in commanders.commanders_in(label) {
+      total += commander.pressure_at(from_c) - commander.pressure_at(to_c);
+    }
 
     total
   }
 
   fn compute_flow_from(
-    &self,
     world: &WorldMut,
-    from: CellIdx,
-    to: CellIdx,
+    from: FluidTransferNode,
+    to: FluidTransferNode,
     pressure_delta: f64,
   ) -> Option<FluidTransfer> {
-    let micros = &world.micros;
-
-    let from_def = micros.get(from).def()?;
-    let to_def = micros.get(to).def();
+    let from_def = from.micro(world).map(MicroEnt::def)?;
+    let to_def = to.micro(world).map(MicroEnt::def);
 
     if let Some(to_def) = to_def
       && to_def.kind != from_def.kind
@@ -306,28 +353,53 @@ impl FlowProcessor {
     }
 
     // If there's a structure there, check the structure's permeability.
-    let structure = world.structures.get(to);
-    if let Some(structure_def) = structure.def() {
-      if !structure_def
-        .permeability
-        .is_permeable_to(from_def.permeability)
+    let from_artery = if let FluidLocation::Artery(_) = from.location() {
+      true
+    } else {
+      false
+    };
+
+    let to_artery = if let FluidLocation::Artery(_) = to.location() {
+      true
+    } else {
+      false
+    };
+
+    if !from_artery && to_artery {
+      // Can't backflow into an artery.
+      return None;
+    }
+
+    // Can flow between arteries.  Bypass structure permeability check.
+    if !from_artery || !to_artery {
+      if let Some(structure) = world.structures.get(to.idx()).ent()
+        && !structure
+          .def()
+          .permeability
+          .is_permeable_to(from_def.permeability)
       {
         return None;
       }
     }
 
-    let spread_yield = if to_def.is_none() {
-      from_def.spread_yield()
+    let amount = if from_artery {
+      // Pumping arteries have a conductance of 1, and ignore spread yield.
+      pressure_delta
     } else {
-      0.0
-    };
-    let excess = pressure_delta - spread_yield;
-    if excess <= 0.0 {
-      return None;
-    }
+      let spread_yield = if to_def.is_none() {
+        from_def.spread_yield()
+      } else {
+        0.0
+      };
+      let excess = pressure_delta - spread_yield;
 
-    let conductance = Self::edge_conductance(from_def, to_def);
-    let amount = excess * conductance;
+      if excess <= 0.0 {
+        return None;
+      }
+
+      let conductance = Self::edge_conductance(from_def, to_def);
+      excess * conductance
+    };
 
     if to_def.is_some() {
       return Some(FluidTransfer {

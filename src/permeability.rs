@@ -1,6 +1,5 @@
 /// Represents the permeability of one type to another.
 /// Permeabilities are in increasing order of restrictiveness.
-// Explicit values as ordering matters
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Permeability {
   /// Fully permeable, no restrictions.
@@ -23,8 +22,8 @@ mod test {
     use super::super::Permeability;
 
     #[test]
-    fn it_is_permeable_to_prev() {
-      assert!(Permeability::Infrastructure.is_permeable_to(Permeability::Open));
+    fn it_is_permeable_to_next() {
+      assert!(Permeability::Open.is_permeable_to(Permeability::Infrastructure));
     }
 
     #[test]
@@ -34,7 +33,7 @@ mod test {
 
     #[test]
     fn it_is_not_permeable_to_next() {
-      assert!(!Permeability::Infrastructure.is_permeable_to(Permeability::Solid));
+      assert!(!Permeability::Solid.is_permeable_to(Permeability::Infrastructure));
     }
   }
 }

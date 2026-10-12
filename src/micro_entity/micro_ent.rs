@@ -1,5 +1,5 @@
 use super::{Density, MicroDef, MicroKind};
-use crate::fluid::Pressurized;
+use crate::{entity::Entity, fluid::Pressurized};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct MicroEnt {
@@ -7,25 +7,31 @@ pub struct MicroEnt {
   density: Density,
 }
 
-impl MicroEnt {
-  pub const fn new(kind: MicroKind, density: Density) -> Self {
-    Self { kind, density }
-  }
+impl Entity for MicroEnt {
+  type Kind = MicroKind;
+  type Def = MicroDef;
+  type Quantity = Density;
 
-  pub const fn def(self) -> &'static MicroDef {
-    self.kind.def()
-  }
-
-  pub fn kind(&self) -> MicroKind {
+  fn kind(&self) -> MicroKind {
     self.kind
   }
 
-  pub fn density(&self) -> Density {
+  fn def(&self) -> &'static MicroDef {
+    self.kind.def()
+  }
+
+  fn quantity(&self) -> Density {
     self.density
   }
 
-  pub fn set_density(&mut self, density: Density) {
-    self.density = density;
+  fn set_quantity(&mut self, quantity: Density) {
+    self.density = quantity;
+  }
+}
+
+impl MicroEnt {
+  pub const fn new(kind: MicroKind, density: Density) -> Self {
+    Self { kind, density }
   }
 }
 

@@ -1,6 +1,8 @@
 use crate::{
   blob_field::BlobField,
-  commander_entity::{CommanderKind, commander_def::CommanderDef, commander_think::CommanderThinkResult},
+  commander_entity::{
+    CommanderKind, commander_def::CommanderDef, commander_think::CommanderThinkResult,
+  },
   geometry::{Coordinate, grid::Grid},
 };
 
@@ -54,8 +56,8 @@ impl CommanderEnt {
     let cmx = blobs.centroid_x_of(label);
     let cmy = blobs.centroid_y_of(label);
 
-    let dist_x = cmx - self.pos.x as f64;
-    let dist_y = cmy - self.pos.y as f64;
+    let dist_x = cmx - f64::from(self.pos.x);
+    let dist_y = cmy - f64::from(self.pos.y);
 
     let delta_x: i32 = if dist_x.abs() > 0.5 {
       dist_x.signum() as i32
@@ -69,10 +71,16 @@ impl CommanderEnt {
       0
     };
 
-    self.pos = self.pos.add(delta_x, delta_y);
-    if grid.cell(self.pos.x, self.pos.y).is_none() {
+    let Some(new_pos) = self.pos.offset(delta_x, delta_y).as_coordinate() else {
+      return CommanderThinkResult::DeleteSelf;
+    };
+
+    if !grid.contains_coordinate(new_pos) {
       return CommanderThinkResult::DeleteSelf;
     }
+
+    self.pos = new_pos;
+
     CommanderThinkResult::Ok
   }
 }

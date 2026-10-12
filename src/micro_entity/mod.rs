@@ -1,12 +1,12 @@
+mod enemy_defs;
 mod micro_collection;
 mod micro_def;
 mod micro_density;
-mod enemy_defs;
 mod micro_ent;
 mod micro_kind;
-mod player_defs;
 mod micro_slot;
 mod micro_type;
+mod player_defs;
 
 pub use micro_collection::MicroCollection;
 pub use micro_def::MicroDef;

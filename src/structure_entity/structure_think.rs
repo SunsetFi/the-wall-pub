@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
-
 use crate::{
   geometry::grid::{CellIdx, Grid},
   micro_entity::MicroCollection,
-  structure_entity::{StructureCollection, StructureState},
+  structure_entity::{
+    Integrity, StructureCollection, StructureState, structure_decl::StructureStateUpdate,
+  },
 };
 
 pub trait StructureThink {
@@ -13,46 +13,55 @@ pub trait StructureThink {
 pub struct StructureThinkArgs<'a> {
   pub grid: Grid,
   pub self_idx: CellIdx,
+  pub current_tick: u64,
   pub structures: &'a StructureCollection,
   pub micros: &'a mut MicroCollection,
-  pub updates: &'a mut StructureUpdates,
+  pub updates: &'a mut StructureUpdateCollection,
 }
 
-pub struct StructureUpdates {
-  updates: BTreeMap<CellIdx, StructureUpdate>,
+pub enum StructureUpdate {
+  Mutate(StructureStateUpdate),
+  Replace(StructureState, Option<Integrity>),
+  Destroy,
 }
 
-impl StructureUpdates {
+pub trait StructureApply {
+  type Update;
+  fn apply(&mut self, update: Self::Update);
+}
+
+pub struct StructureUpdateCollection {
+  updates: Vec<(CellIdx, StructureUpdate)>,
+}
+
+impl StructureUpdateCollection {
   pub fn new() -> Self {
     Self {
-      updates: BTreeMap::new(),
+      updates: Vec::new(),
     }
   }
 
-  pub fn replace(&mut self, idx: CellIdx, state: StructureState) {
-    self.insert(idx, StructureUpdate::Replace(state));
+  pub fn has_updates(&self) -> bool {
+    !self.updates.is_empty()
+  }
+
+  pub fn mutate(&mut self, idx: CellIdx, update: StructureStateUpdate) {
+    self.insert(idx, StructureUpdate::Mutate(update));
+  }
+
+  pub fn replace(&mut self, idx: CellIdx, state: StructureState, integrity: Option<Integrity>) {
+    self.insert(idx, StructureUpdate::Replace(state, integrity));
   }
 
   pub fn destroy(&mut self, idx: CellIdx) {
     self.insert(idx, StructureUpdate::Destroy);
   }
 
-  pub fn iter(&self) -> impl Iterator<Item = (CellIdx, &StructureUpdate)> {
-    self
-      .updates
-      .iter()
-      .map(|(idx, update)| (idx.clone(), update))
+  pub fn drain(&mut self) -> impl Iterator<Item = (CellIdx, StructureUpdate)> {
+    self.updates.drain(..)
   }
 
   fn insert(&mut self, idx: CellIdx, update: StructureUpdate) {
-    self.updates.insert(idx, update);
+    self.updates.push((idx, update));
   }
-}
-
-pub enum StructureUpdate {
-  // WARN: This requires cloning the state all over the place
-  // States may get Heavy...
-  // Could swap this out with some StructureStateUpdate trait?  Would by dyn but should be fine?  Make a macro instead?
-  Replace(StructureState),
-  Destroy,
 }

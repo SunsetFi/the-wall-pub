@@ -51,7 +51,7 @@ pub fn structure_ent_impl(attr: TokenStream, item: TokenStream) -> Result<TokenS
         alignment: #alignment,
         permeability: #permeability,
         material: #material,
-        toughness: #toughness,
+        toughness: crate::structure_entity::Integrity::new(#toughness).unwrap(),
         construction_density: #construction_density,
       };
     }

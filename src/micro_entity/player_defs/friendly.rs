@@ -9,7 +9,6 @@ use crate::{alignment::Alignment, material::Material};
   spread_threshold = 0.12,
   empty_conductance = 1.0,
   peer_conductance = 1.0,
-  combat_power = 4.0,
-  combat_loss_saturation = 0.24,
+  combat_loss_saturation = 0.2,
 )]
 pub struct FriendlyMicro {}

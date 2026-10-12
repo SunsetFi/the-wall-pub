@@ -1,4 +1,4 @@
-use crate::geometry::Coordinate;
+use crate::{direction::Direction, geometry::Coordinate};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct CellIdx(u32);
@@ -72,6 +72,10 @@ impl Grid {
     Some(Coordinate { x, y })
   }
 
+  pub fn contains_coordinate(self, coordinate: Coordinate) -> bool {
+    coordinate.x < self.width && coordinate.y < self.height
+  }
+
   pub fn neighbor(self, x: u32, y: u32, dx: i32, dy: i32) -> Option<CellIdx> {
     // If these go negative, they wrap around, which we will trust
     // gets captured by the width and height check
@@ -80,7 +84,7 @@ impl Grid {
     self.cell(x, y)
   }
 
-  pub fn neighbors(&self, idx: CellIdx) -> impl Iterator<Item = CellIdx> {
+  pub fn neighbors(self, idx: CellIdx) -> impl Iterator<Item = CellIdx> {
     self
       .coordinate(idx)
       .into_iter()
@@ -97,7 +101,7 @@ impl Grid {
     (0..count).map(CellIdx::from_ordinal)
   }
 
-  pub fn for_each_adjacent_pairs(&self, mut f: impl FnMut(CellIdx, CellIdx)) {
+  pub fn for_each_adjacent_pair(self, mut f: impl FnMut(CellIdx, CellIdx)) {
     // Little bit of Process here.  TS used a pairs system, that blob-field also has.
     // Could use it, but its overly complex for the stupid "arbitrary pairs" thing.
     let width = self.width;
@@ -111,6 +115,23 @@ impl Grid {
         }
         if y > 0 {
           f(idx, CellIdx::from_ordinal(ord - width));
+        }
+      }
+    }
+  }
+
+  pub fn for_each_adjacent_pair_direction(self, mut f: impl FnMut(CellIdx, CellIdx, Direction)) {
+    let width = self.width;
+    for y in 0..self.height {
+      let row = y * width;
+      for x in 0..width {
+        let ord = row + x;
+        let idx = CellIdx::from_ordinal(ord);
+        if x > 0 {
+          f(idx, CellIdx::from_ordinal(ord - 1), Direction::Left);
+        }
+        if y > 0 {
+          f(idx, CellIdx::from_ordinal(ord - width), Direction::Up);
         }
       }
     }
@@ -303,7 +324,7 @@ mod tests {
     fn it_calls_callback_for_each_adjacent_pair() {
       let grid = Grid::new(2, 2);
       let mut pairs = Vec::new();
-      grid.for_each_adjacent_pairs(|a, b| pairs.push((a, b)));
+      grid.for_each_adjacent_pair(|a, b| pairs.push((a, b)));
       assert_eq!(
         pairs,
         vec![

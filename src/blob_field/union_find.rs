@@ -10,12 +10,6 @@ impl UnionFind {
     }
   }
 
-  pub fn reset(&mut self) {
-    for (i, value) in self.parent.iter_mut().enumerate() {
-      *value = i;
-    }
-  }
-
   pub fn set(&mut self, index: usize, parent: usize) {
     self.parent[index] = parent;
   }
@@ -70,17 +64,6 @@ mod tests {
     #[test]
     fn it_creates_new_with_own_parents() {
       let uf = UnionFind::new(3);
-      assert_eq!(uf.parent, vec![0, 1, 2]);
-    }
-  }
-
-  mod reset {
-    use super::*;
-
-    #[test]
-    fn it_sets_parents() {
-      let mut uf = from_parents(&[2, 0, 1]);
-      uf.reset();
       assert_eq!(uf.parent, vec![0, 1, 2]);
     }
   }

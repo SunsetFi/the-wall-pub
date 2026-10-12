@@ -1,12 +1,16 @@
 use macros::structure_ent;
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::{
+  JsError, Sim,
   alignment::Alignment,
+  entity::Entity,
   material::Material,
   micro_entity::MicroKind,
   permeability::Permeability,
   structure_entity::{
-    StructureKind, StructureState, StructureThink, structure_think::StructureThinkArgs,
+    StructureKind, StructureState, StructureThink,
+    structure_think::{StructureApply, StructureThinkArgs},
   },
 };
 
@@ -27,21 +31,32 @@ struct InfrastructureConstruction {
 }
 
 impl InfrastructureStructure {
-  pub fn new_from_construction(kind: StructureKind) -> Option<InfrastructureStructure> {
-    let Some(_) = kind.def().construction_density else {
-      return None;
-    };
+  pub fn from_construction_kind(
+    kind: StructureKind,
+    completed_density: f64,
+  ) -> Option<InfrastructureStructure> {
+    kind.def().construction_density?;
     Some(InfrastructureStructure {
-      construction: Some(InfrastructureConstruction { kind, density: 0.0 }),
+      construction: Some(InfrastructureConstruction {
+        kind,
+        density: completed_density,
+      }),
     })
   }
 
-  fn copy_update_density(&self, density: f64) -> StructureState {
-    let mut copy = *self;
-    if let Some(construction) = &mut copy.construction {
-      construction.density = density;
+  pub fn set_construction(&mut self, kind: StructureKind, density: f64) -> bool {
+    if kind.def().construction_density.is_none() {
+      return false;
     }
-    StructureState::Infrastructure(copy)
+
+    self.construction = Some(InfrastructureConstruction { kind, density });
+    true
+  }
+}
+
+impl From<InfrastructureStructure> for StructureState {
+  fn from(infrastructure: InfrastructureStructure) -> StructureState {
+    StructureState::Infrastructure(infrastructure)
   }
 }
 
@@ -55,8 +70,8 @@ impl StructureThink for InfrastructureStructure {
       return;
     };
 
-    let new_density: f64 = {
-      let Some(micro) = args.micros.get(args.self_idx).get_ent() else {
+    let consumed: f64 = {
+      let Some(micro) = args.micros.get(args.self_idx).ent() else {
         return;
       };
 
@@ -64,18 +79,18 @@ impl StructureThink for InfrastructureStructure {
         return;
       }
 
-      let micro_density = micro.density().value();
+      let micro_density = micro.quantity().value();
       let consumed = micro_density.min(target_density - construction.density);
 
       let construction_density = construction.density + consumed;
       if construction_density >= target_density {
         args
           .updates
-          .replace(args.self_idx, StructureState::new(construction.kind));
+          .replace(args.self_idx, StructureState::new(construction.kind), None);
       } else {
-        args.updates.replace(
+        args.updates.mutate(
           args.self_idx,
-          self.copy_update_density(construction_density),
+          InfrastructureUpdate::UpdateConstructDensity(construction_density).into(),
         );
       }
       consumed
@@ -84,6 +99,45 @@ impl StructureThink for InfrastructureStructure {
     args
       .micros
       .get_mut(args.self_idx)
-      .offset_density(new_density);
+      .offset_quantity(-consumed);
+  }
+}
+
+pub enum InfrastructureUpdate {
+  UpdateConstructDensity(f64),
+}
+impl StructureApply for InfrastructureStructure {
+  type Update = InfrastructureUpdate;
+
+  fn apply(&mut self, update: Self::Update) {
+    match update {
+      InfrastructureUpdate::UpdateConstructDensity(density) => {
+        if let Some(construction) = &mut self.construction {
+          construction.density = density;
+        }
+      }
+    }
+  }
+}
+
+#[wasm_bindgen]
+impl Sim {
+  pub fn set_structure_infrastructure_construction(
+    &mut self,
+    ord: u32,
+    kind: StructureKind,
+    progress: f64,
+  ) -> Result<(), JsError> {
+    let StructureState::Infrastructure(infrastructure) = self.structure_state_mut(ord)? else {
+      return Err(JsError::InvalidKind(
+        ord,
+        "Set construction used on non-infrastructure",
+      ));
+    };
+
+    if !infrastructure.set_construction(kind, progress) {
+      Err(JsError::InvalidKind(ord, "Kind is not constructable"))?
+    }
+    Ok(())
   }
 }

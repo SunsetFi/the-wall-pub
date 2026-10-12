@@ -5,6 +5,7 @@ use crate::MicroKind;
 use crate::blob_field::probe::Probe;
 use crate::blob_field::union_find::UnionFind;
 use crate::geometry::Coordinate;
+use crate::geometry::grid::Grid;
 use crate::micro_entity::{MicroCollection, MicroSlot};
 
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq)]
@@ -54,10 +55,10 @@ pub struct BlobField {
 const PAIR_OFFSETS: [(isize, isize); 2] = [(-1, 0), (0, -1)];
 
 impl BlobField {
-  pub fn new(collection: &MicroCollection) -> Self {
-    let size = collection.size();
-    let width = collection.width();
-    let height = collection.height();
+  pub fn new(grid: Grid) -> Self {
+    let size = grid.size();
+    let width = grid.width();
+    let height = grid.height();
     Self {
       probes: Probe::from_offsets(PAIR_OFFSETS, width as isize),
       metrics: vec![BlobMetrics::default(); size],
@@ -72,6 +73,14 @@ impl BlobField {
   pub fn process(&mut self, micros: &MicroCollection) {
     self.scan(micros);
     self.flatten(micros);
+  }
+
+  pub fn label(&self, ord: u32) -> Option<FieldLabel> {
+    let ord = ord as usize;
+    if ord >= self.labels.len() {
+      return None;
+    }
+    Some(FieldLabel::new(ord))
   }
 
   pub fn label_at_cell(&self, x: u32, y: u32) -> Option<FieldLabel> {
@@ -182,7 +191,7 @@ impl BlobField {
     let mut next: usize = 0;
     for y in 0..height {
       for x in 0..width {
-        let idx = micros.cell_idx(x, y).unwrap();
+        let idx = micros.grid().cell(x, y).unwrap();
         let index = idx.index();
         let label = self.labels[index];
         let Some(label) = label.map(|l| l.index()) else {
@@ -247,8 +256,8 @@ mod tests {
 
     #[test]
     fn it_creates_a_field() {
-      let micros = MicroCollection::new(Grid::new(3, 2));
-      let bf = BlobField::new(&micros);
+      let grid = Grid::new(3, 2);
+      let bf = BlobField::new(grid);
       assert_eq!(bf.probes.len(), 2, "Probe length should be 2");
       assert_eq!(bf.width, 3, "width should be 3");
       assert_eq!(bf.height, 2, "height should be 2");
@@ -256,7 +265,11 @@ mod tests {
   }
 
   mod process {
-    use crate::{MicroKind, geometry::grid::Grid, micro_entity::Density};
+    use crate::{
+      MicroKind,
+      geometry::grid::Grid,
+      micro_entity::{Density, MicroEnt},
+    };
 
     use super::super::*;
 
@@ -281,7 +294,7 @@ mod tests {
             world
               .cell_mut(x as u32, y as u32)
               .unwrap()
-              .set(value, Density::MAX);
+              .set_ent(MicroEnt::new(value, Density::MAX));
           }
         }
       }
@@ -308,10 +321,11 @@ mod tests {
 
     #[test]
     fn it_groups_like_keys() {
-      let mut micros = MicroCollection::new(Grid::new(3, 2));
-      let mut bf = BlobField::new(&micros);
+      let grid = Grid::new(3, 2);
+      let mut bf = BlobField::new(grid);
 
       let field = field(vec![row(vec![A, E, A]), row(vec![A, A, E])]);
+      let mut micros = MicroCollection::new(grid);
       populate_world(&mut micros, field);
       bf.process(&micros);
 
@@ -326,8 +340,9 @@ mod tests {
 
     #[test]
     fn it_does_not_combine_unlike_keys() {
-      let mut micros = MicroCollection::new(Grid::new(2, 2));
-      let mut bf = BlobField::new(&micros);
+      let grid = Grid::new(2, 2);
+      let mut micros = MicroCollection::new(grid);
+      let mut bf = BlobField::new(grid);
 
       let field = field(vec![row(vec![A, E]), row(vec![A, B])]);
       populate_world(&mut micros, field);
@@ -346,8 +361,9 @@ mod tests {
 
     #[test]
     fn it_handles_all_unique_keys() {
-      let mut micros = MicroCollection::new(Grid::new(2, 2));
-      let mut bf = BlobField::new(&micros);
+      let grid = Grid::new(2, 2);
+      let mut micros = MicroCollection::new(grid);
+      let mut bf = BlobField::new(grid);
       let field = field(vec![row(vec![A, B]), row(vec![C, E])]);
       populate_world(&mut micros, field);
       bf.process(&micros);
@@ -367,8 +383,9 @@ mod tests {
 
     #[test]
     fn it_joins_blobs() {
-      let mut micros = MicroCollection::new(Grid::new(5, 3));
-      let mut bf = BlobField::new(&micros);
+      let grid = Grid::new(5, 3);
+      let mut micros = MicroCollection::new(grid);
+      let mut bf = BlobField::new(grid);
       let field = field(vec![
         row(vec![E, E, E, E, A]),
         row(vec![A, A, E, A, A]),
@@ -394,8 +411,9 @@ mod tests {
 
     #[test]
     fn it_flattens_labels() {
-      let mut micros = MicroCollection::new(Grid::new(5, 3));
-      let mut bf = BlobField::new(&micros);
+      let grid = Grid::new(5, 3);
+      let mut micros = MicroCollection::new(grid);
+      let mut bf = BlobField::new(grid);
       let field = field(vec![
         row(vec![E, E, E, E, A]),
         row(vec![A, A, E, A, A]),
